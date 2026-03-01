@@ -40,7 +40,8 @@ def log_to_terminal(title: str, data: dict = None, message: str = None):
     print(f"{separator}\n")
 
 # Ensure project root is on path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, PROJECT_ROOT)
 
 from src.config import (
     PLASTIC_WASTE_CSV,
@@ -53,6 +54,27 @@ from src.config import (
     RF_MODEL_PATH,
     DATA_DIR,
 )
+from src.database import (
+    save_training_result,
+    save_prediction as db_save_prediction,
+    get_training_history,
+    get_prediction_history,
+    save_dataset_info,
+)
+
+# ── Results Directory ────────────────────────────────────────────────────────
+RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+
+def save_chart(fig, name: str) -> str:
+    """Save a matplotlib figure to the results/ folder and log to terminal."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{name}_{timestamp}.png"
+    filepath = os.path.join(RESULTS_DIR, filename)
+    fig.savefig(filepath, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    print(f"[Chart Saved] 📊 {filepath}")
+    return filepath
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -229,7 +251,7 @@ with st.sidebar:
     st.markdown("---")
     page = st.radio(
         "Navigate",
-        ["🏠 Home", "📊 Dataset Explorer", "🤖 Model Training", "🔮 Prediction", "ℹ️ About"],
+        ["🏠 Home", "📊 Dataset Explorer", "🤖 Model Training", "🔮 Prediction", "📜 History", "ℹ️ About"],
         label_visibility="collapsed",
     )
     st.markdown("---")
@@ -304,7 +326,16 @@ if page == "🏠 Home":
             with st.spinner("Generating synthetic datasets..."):
                 from data.generate_dataset import main as gen_main
                 gen_main()
-            log_to_terminal("DATASET GENERATION", message="✅ All 3 datasets generated (500 rows each)")
+                # Save info to MongoDB
+                for csv_name, csv_path in [
+                    ("plastic_waste", PLASTIC_WASTE_CSV),
+                    ("bitumen_road_properties", BITUMEN_PROPERTIES_CSV),
+                    ("cost_dataset", COST_CSV),
+                ]:
+                    if os.path.exists(csv_path):
+                        df_temp = pd.read_csv(csv_path)
+                        save_dataset_info(csv_name, len(df_temp), len(df_temp.columns), list(df_temp.columns))
+            log_to_terminal("DATASET GENERATION", message="✅ All 3 datasets generated (500 rows each) + saved to MongoDB")
             st.success("✅ Datasets generated successfully!")
             st.rerun()
     else:
@@ -361,6 +392,7 @@ elif page == "📊 Dataset Explorer":
             axes[1].legend()
             plt.tight_layout()
             st.pyplot(fig)
+            save_chart(fig, "plastic_waste_distribution")
 
         with tab2:
             df = pd.read_csv(BITUMEN_PROPERTIES_CSV)
@@ -393,6 +425,7 @@ elif page == "📊 Dataset Explorer":
                 ax.tick_params(colors='#9ca3af')
             plt.tight_layout()
             st.pyplot(fig)
+            save_chart(fig, "bitumen_road_properties")
 
         with tab3:
             df = pd.read_csv(COST_CSV)
@@ -436,6 +469,7 @@ elif page == "📊 Dataset Explorer":
             ax.set_ylabel("Cost Reduction %", color='#9ca3af')
             plt.tight_layout()
             st.pyplot(fig)
+            save_chart(fig, "cost_analysis")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -489,6 +523,8 @@ elif page == "🤖 Model Training":
                 "Overall RMSE": svm_metrics['overall']['RMSE'],
                 **{f"{t} R²": svm_metrics[t]['R²'] for t in TARGET_COLUMNS},
             })
+            # Save to MongoDB
+            save_training_result("SVM", svm_metrics, svm_time)
             st.success(f"✅ SVM trained in {svm_time}s — Overall R²: {svm_metrics['overall']['R²']}")
 
         if train_rf_flag:
@@ -502,6 +538,8 @@ elif page == "🤖 Model Training":
                 "Overall RMSE": rf_metrics['overall']['RMSE'],
                 **{f"{t} R²": rf_metrics[t]['R²'] for t in TARGET_COLUMNS},
             })
+            # Save to MongoDB
+            save_training_result("Random Forest", rf_metrics, rf_time)
             st.success(f"✅ Random Forest trained in {rf_time}s — Overall R²: {rf_metrics['overall']['R²']}")
 
         # ── Display Metrics ──────────────────────────────────────────────
@@ -558,6 +596,7 @@ elif page == "🤖 Model Training":
             axes[1].legend()
             plt.tight_layout()
             st.pyplot(fig)
+            save_chart(fig, "model_comparison")
 
     # Show existing model status
     st.markdown("---")
@@ -634,6 +673,9 @@ elif page == "🔮 Prediction":
             "Recommendation": result['recommendation'],
         })
 
+        # ── Save prediction to MongoDB ───────────────────────────────
+        db_save_prediction(plastic_pct, plastic_type, model_choice, result)
+
         st.markdown("<br>", unsafe_allow_html=True)
 
         # ── Result Cards ─────────────────────────────────────────────
@@ -663,8 +705,6 @@ elif page == "🔮 Prediction":
                 unsafe_allow_html=True,
             )
         with r3:
-            si = result.get('strength_improvement', result['strength_improvement'])
-            sign = "+" if si >= 0 else ""
             st.markdown(
                 f"""<div class='metric-card'>
                     <div class='value'>{sign}{si}%</div>
@@ -720,6 +760,85 @@ elif page == "🔮 Prediction":
             }
         )
         st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: History (MongoDB)
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "📜 History":
+    st.markdown("<div class='section-header'>📜 History (MongoDB)</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        "<div class='info-card'>"
+        "<h4>📡 Database-Backed History</h4>"
+        "<p style='color:#9ca3af;'>All training runs and predictions are stored in "
+        "MongoDB Atlas. This page shows recent activity pulled from the database.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    tab_train, tab_pred = st.tabs(["🤖 Training Runs", "🔮 Predictions"])
+
+    with tab_train:
+        training_data = get_training_history()
+        if training_data:
+            st.markdown(f"**{len(training_data)}** training runs found")
+            rows = []
+            for item in training_data:
+                rows.append({
+                    "Timestamp": item.get("timestamp", "").strftime("%Y-%m-%d %H:%M:%S") if hasattr(item.get("timestamp", ""), "strftime") else str(item.get("timestamp", "")),
+                    "Model": item.get("model_name", ""),
+                    "R²": item.get("overall_r2", ""),
+                    "MAE": item.get("overall_mae", ""),
+                    "RMSE": item.get("overall_rmse", ""),
+                    "Train Time (s)": item.get("train_time_seconds", ""),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No training history yet. Train a model to see results here.")
+
+    with tab_pred:
+        prediction_data = get_prediction_history()
+        if prediction_data:
+            st.markdown(f"**{len(prediction_data)}** predictions found")
+            rows = []
+            for item in prediction_data:
+                inp = item.get("input", {})
+                res = item.get("results", {})
+                rows.append({
+                    "Timestamp": item.get("timestamp", "").strftime("%Y-%m-%d %H:%M:%S") if hasattr(item.get("timestamp", ""), "strftime") else str(item.get("timestamp", "")),
+                    "Plastic %": inp.get("plastic_pct", ""),
+                    "Type": inp.get("plastic_type", ""),
+                    "Model": inp.get("model_used", ""),
+                    "Stability (kN)": res.get("marshall_stability", ""),
+                    "Strength (MPa)": res.get("tensile_strength", ""),
+                    "Durability": res.get("durability_label", ""),
+                    "Cost Reduction %": res.get("cost_reduction_pct", ""),
+                    "Recommendation": res.get("recommendation", ""),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No prediction history yet. Make a prediction to see results here.")
+
+    # Saved Charts section
+    st.markdown("---")
+    st.markdown("<div class='section-header'>📊 Saved Charts</div>", unsafe_allow_html=True)
+    chart_files = sorted(
+        [f for f in os.listdir(RESULTS_DIR) if f.endswith(".png")],
+        reverse=True,
+    ) if os.path.exists(RESULTS_DIR) else []
+
+    if chart_files:
+        st.markdown(f"**{len(chart_files)}** charts saved to `results/`")
+        # Show latest 6 in a grid
+        display_files = chart_files[:6]
+        cols = st.columns(3)
+        for i, f in enumerate(display_files):
+            with cols[i % 3]:
+                img_path = os.path.join(RESULTS_DIR, f)
+                st.image(img_path, caption=f, use_container_width=True)
+    else:
+        st.info("No charts saved yet. Visit Dataset Explorer or train models to generate charts.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -816,6 +935,7 @@ elif page == "ℹ️ About":
         <p style='color:#9ca3af;'>
         <strong>Backend:</strong> Python, Pandas, NumPy, Scikit-learn &nbsp;|&nbsp;
         <strong>Frontend:</strong> Streamlit &nbsp;|&nbsp;
+        <strong>Database:</strong> MongoDB Atlas &nbsp;|&nbsp;
         <strong>Models:</strong> SVM (RBF), Random Forest &nbsp;|&nbsp;
         <strong>Serialization:</strong> Joblib (.pkl)
         </p>
