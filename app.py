@@ -14,6 +14,30 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import logging
+from datetime import datetime
+
+# ── Terminal Logger Setup ────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s │ %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("WasteToWealth")
+
+
+def log_to_terminal(title: str, data: dict = None, message: str = None):
+    """Print structured output to the terminal."""
+    separator = "═" * 60
+    print(f"\n{separator}")
+    print(f"  {title}")
+    print(f"{separator}")
+    if message:
+        print(f"  {message}")
+    if data:
+        for key, value in data.items():
+            print(f"  {key:.<35s} {value}")
+    print(f"{separator}\n")
 
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -280,6 +304,7 @@ if page == "🏠 Home":
             with st.spinner("Generating synthetic datasets..."):
                 from data.generate_dataset import main as gen_main
                 gen_main()
+            log_to_terminal("DATASET GENERATION", message="✅ All 3 datasets generated (500 rows each)")
             st.success("✅ Datasets generated successfully!")
             st.rerun()
     else:
@@ -298,6 +323,7 @@ elif page == "📊 Dataset Explorer":
             with st.spinner("Generating synthetic datasets..."):
                 from data.generate_dataset import main as gen_main
                 gen_main()
+            log_to_terminal("DATASET GENERATION", message="✅ All 3 datasets generated (500 rows each)")
             st.success("✅ Done!")
             st.rerun()
     else:
@@ -442,6 +468,11 @@ elif page == "🤖 Model Training":
 
         with st.spinner("Preprocessing data..."):
             X_train, X_test, y_train, y_test, scaler, df = get_processed_data()
+        log_to_terminal("DATA PREPROCESSING", {
+            "Training samples": X_train.shape[0],
+            "Test samples": X_test.shape[0],
+            "Features": X_train.shape[1],
+        })
         st.success(f"✅ Data preprocessed: {X_train.shape[0]} train / {X_test.shape[0]} test samples")
 
         svm_metrics = None
@@ -451,12 +482,26 @@ elif page == "🤖 Model Training":
             with st.spinner("Training SVM model..."):
                 svm_model, svm_time = train_svm(X_train, y_train)
                 svm_metrics = evaluate_model(svm_model, X_test, y_test)
+            log_to_terminal("SVM MODEL TRAINING", {
+                "Training Time": f"{svm_time}s",
+                "Overall R²": svm_metrics['overall']['R²'],
+                "Overall MAE": svm_metrics['overall']['MAE'],
+                "Overall RMSE": svm_metrics['overall']['RMSE'],
+                **{f"{t} R²": svm_metrics[t]['R²'] for t in TARGET_COLUMNS},
+            })
             st.success(f"✅ SVM trained in {svm_time}s — Overall R²: {svm_metrics['overall']['R²']}")
 
         if train_rf_flag:
             with st.spinner("Training Random Forest model..."):
                 rf_model, rf_time = train_random_forest(X_train, y_train)
                 rf_metrics = evaluate_model(rf_model, X_test, y_test)
+            log_to_terminal("RANDOM FOREST MODEL TRAINING", {
+                "Training Time": f"{rf_time}s",
+                "Overall R²": rf_metrics['overall']['R²'],
+                "Overall MAE": rf_metrics['overall']['MAE'],
+                "Overall RMSE": rf_metrics['overall']['RMSE'],
+                **{f"{t} R²": rf_metrics[t]['R²'] for t in TARGET_COLUMNS},
+            })
             st.success(f"✅ Random Forest trained in {rf_time}s — Overall R²: {rf_metrics['overall']['R²']}")
 
         # ── Display Metrics ──────────────────────────────────────────────
@@ -572,8 +617,22 @@ elif page == "🔮 Prediction":
             try:
                 result = predict(plastic_pct, plastic_type, model_key)
             except Exception as e:
+                log_to_terminal("PREDICTION ERROR", message=str(e))
                 st.error(f"Prediction error: {e}")
                 st.stop()
+
+        # ── Log prediction to terminal ───────────────────────────────
+        si = result['strength_improvement']
+        sign = "+" if si >= 0 else ""
+        log_to_terminal(f"PREDICTION RESULT — {plastic_pct}% {plastic_type} ({model_choice})", {
+            "Marshall Stability (kN)": result['marshall_stability'],
+            "Tensile Strength (MPa)": result['tensile_strength'],
+            "Durability Score": result['durability_score'],
+            "Durability Level": result['durability_label'],
+            "Cost Reduction (%)": result['cost_reduction_pct'],
+            "Strength Improvement (%)": f"{sign}{si}",
+            "Recommendation": result['recommendation'],
+        })
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -604,7 +663,7 @@ elif page == "🔮 Prediction":
                 unsafe_allow_html=True,
             )
         with r3:
-            si = result['strength_improvement']
+            si = result.get('strength_improvement', result['strength_improvement'])
             sign = "+" if si >= 0 else ""
             st.markdown(
                 f"""<div class='metric-card'>
