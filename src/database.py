@@ -8,6 +8,11 @@ storing training runs and prediction results.
 import os
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
+
+# Load .env from project root
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+
 try:
     from pymongo import MongoClient
     from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
@@ -15,11 +20,8 @@ try:
 except ImportError:
     PYMONGO_AVAILABLE = False
 
-# ── Connection String ────────────────────────────────────────────────────────
-MONGO_URI = os.environ.get(
-    "MONGO_URI",
-    "mongodb+srv://sagarika:sagarika48@plastic2road.fdgbgcs.mongodb.net/"
-)
+# ── Connection String (loaded from .env file) ────────────────────────────────
+MONGO_URI = os.environ.get("MONGO_URI", "")
 DB_NAME = "waste_to_wealth"
 
 # ── Singleton client ─────────────────────────────────────────────────────────

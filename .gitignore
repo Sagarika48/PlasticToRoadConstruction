@@ -10,7 +10,10 @@ build/
 
 # Virtual environments
 venv/
-.env/
+.venv/
+
+# Environment variables (secrets)
+.env
 
 # IDE
 .vscode/
