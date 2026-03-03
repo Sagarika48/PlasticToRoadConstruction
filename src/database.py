@@ -18,7 +18,7 @@ except ImportError:
 # ── Connection String ────────────────────────────────────────────────────────
 MONGO_URI = os.environ.get(
     "MONGO_URI",
-    "mongodb+srv://pdreddy:Dhanu123%40@pdr.nfvdmex.mongodb.net/"
+    "mongodb+srv://sagarika:sagarika48@plastic2road.fdgbgcs.mongodb.net/"
 )
 DB_NAME = "waste_to_wealth"
 
